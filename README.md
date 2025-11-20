@@ -77,9 +77,11 @@ rustup component add rust-src llvm-tools-preview
 sudo apt install qemu-system-aarch64
 ```
 
+Additionally you will need a version of the [aarch64-none-elf](https://developer.arm.com/Tools%20and%20Software/GNU%20Toolchain) toolchain installed. To do this, download the correct release of `aarch64-none-elf` onto your computer, unpack it, then export the `bin` folder to path.
+
 ### Running via QEMU
 
-To build the kernel and launch it in QEMU: 
+To build the kernel and launch it in QEMU:
 
 ``` bash
 cargo run --release
