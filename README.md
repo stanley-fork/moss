@@ -88,7 +88,7 @@ cargo run --release
 
 ### Running the Test Suite
 Because `libkernel` is architecturally decoupled, you can run the logic tests on
-your host machine: code Bash
+your host machine:
 
 ``` bash
 cargo test -p libkernel --target x86_64-unknown-linux-gnu
