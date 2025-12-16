@@ -14,12 +14,15 @@ use libkernel::{
 /// A per-futex wait queue holding wakers for blocked tasks.
 struct FutexWaitQueue {
     wakers: WakerSet,
+    /// Number of pending wake-ups for waiters on this futex.
+    wakeups: usize,
 }
 
 impl FutexWaitQueue {
     fn new() -> Self {
         Self {
             wakers: WakerSet::new(),
+            wakeups: 0,
         }
     }
 }
@@ -94,13 +97,20 @@ pub async fn sys_futex(
                     .clone()
             };
 
-            // Park the current task until the word’s value differs or it is woken
+            if copy_from_user(uaddr).await? != val {
+                return Err(KernelError::TryAgain);
+            }
+
             wait_until(
                 waitq_arc.clone(),
                 |state| &mut state.wakers,
-                |_| {
-                    let cur = unsafe { core::ptr::read_volatile(uaddr.value() as *const u32) };
-                    if cur != val { Some(()) } else { None }
+                |state| {
+                    if state.wakeups > 0 {
+                        state.wakeups -= 1;
+                        Some(())
+                    } else {
+                        None
+                    }
                 },
             )
             .await;
@@ -116,6 +126,8 @@ pub async fn sys_futex(
                 if let Some(waitq_arc) = table.lock_save_irq().get(&uaddr.value()).cloned() {
                     let mut waitq = waitq_arc.lock_save_irq();
                     for _ in 0..nr_wake {
+                        // Record a pending wake-up and attempt to wake a single waiter.
+                        waitq.wakeups = waitq.wakeups.saturating_add(1);
                         waitq.wakers.wake_one();
                         woke += 1;
                     }
