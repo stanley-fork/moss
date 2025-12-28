@@ -11,7 +11,7 @@ use crate::{
     sync::{OnceLock, SpinLock},
 };
 use alloc::{collections::binary_heap::BinaryHeap, sync::Arc};
-use core::sync::atomic::AtomicUsize;
+use log::warn;
 use libkernel::CpuOps;
 use crate::arch::ArchImpl;
 use crate::interrupts::cpu_messenger::{message_cpu, Message};
@@ -126,34 +126,48 @@ impl Driver for SysTimer {
 
 impl InterruptHandler for SysTimer {
     fn handle_irq(&self, _desc: InterruptDescriptor) {
-        // static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        // let count = COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        // if count % 100 == 0 {
-        //     log::debug!("SysTimer IRQ handled {} times", count);
-        // }
+        // TODO: find a nicer way to handle events without heap-allocating or having a fixed limit.
         let mut wake_q = self.wakeup_q.lock_save_irq();
+        let mut events = [const { None }; 16];
+        let mut handled_events = 0;
 
         while let Some(next_event) = wake_q.peek() {
             if next_event.when <= self.driver.now() {
                 let event = wake_q.pop().unwrap(); // We know it's there from peek()
 
-                match event.what {
-                    WakeupKind::Task(waker) => waker.wake(),
-                    WakeupKind::Preempt(id) => {
-                        crate::sched::sched_yield();
-                        if id != ArchImpl::id() {
-                            // Send an IPI to the target CPU to preempt it
-                            if let Err(e) = message_cpu(id, Message::Preempt) {
-                                log::warn!("Failed to send preempt IPI to CPU {}: {}", id, e);
-                            }
-                        }
-                    },
+                events[handled_events] = Some(event);
+                handled_events += 1;
+                if handled_events == events.len() {
+                    warn!("SysTimer: Too many events to handle in one interrupt");
+                    break;
                 }
             } else {
                 // The next event is in the future, so we're done.
                 break;
             }
         }
+
+        drop(wake_q); // Release the lock before waking tasks or sending IPIs.
+
+        for event in events {
+            let Some(event) = event else {
+                break;
+            };
+            match event.what {
+                WakeupKind::Task(waker) => waker.wake(),
+                WakeupKind::Preempt(id) => {
+                    crate::sched::sched_yield();
+                    if id != ArchImpl::id() {
+                        // Send an IPI to the target CPU to preempt it
+                        if let Err(e) = message_cpu(id, Message::Preempt) {
+                            log::warn!("Failed to send preempt IPI to CPU {}: {}", id, e);
+                        }
+                    }
+                },
+            }
+        }
+
+        let wake_q = self.wakeup_q.lock_save_irq();
 
         // Always re-arm: either next task/event, or a periodic/preemption tick.
         let next_deadline = wake_q.peek().map(|e| e.when).or_else(|| {
