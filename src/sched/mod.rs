@@ -1,4 +1,4 @@
-use crate::drivers::timer::{Instant, now, schedule_preempt, schedule_force_preempt};
+use crate::drivers::timer::{Instant, now, schedule_force_preempt, schedule_preempt};
 use crate::interrupts::cpu_messenger::{Message, message_cpu};
 use crate::{
     arch::{Arch, ArchImpl},
@@ -330,7 +330,9 @@ impl SchedState {
         {
             let mut deadline_guard = next_task.deadline.lock_save_irq();
             // Refresh deadline if none is set or the previous deadline has elapsed.
-            if deadline_guard.is_none_or(|d| d <= now_inst + Duration::from_millis(DEFAULT_TIME_SLICE_MS)) {
+            if deadline_guard
+                .is_none_or(|d| d <= now_inst + Duration::from_millis(DEFAULT_TIME_SLICE_MS))
+            {
                 *deadline_guard = Some(now_inst + Duration::from_millis(DEFAULT_TIME_SLICE_MS));
             }
             if let Some(d) = *deadline_guard {
