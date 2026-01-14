@@ -687,6 +687,7 @@ struct TmpFsSymlinkInode<C: CpuOps> {
     id: InodeId,
     target: PathBuf,
     attr: SpinLockIrq<FileAttr, C>,
+    xattr: SpinLockIrq<Vec<(String, Vec<u8>)>, C>,
 }
 
 #[async_trait]
@@ -707,6 +708,48 @@ impl<C: CpuOps> Inode for TmpFsSymlinkInode<C> {
     async fn readlink(&self) -> Result<PathBuf> {
         Ok(self.target.clone())
     }
+
+    async fn getxattr(&self, name: &str) -> Result<Vec<u8>> {
+        let guard = self.xattr.lock_save_irq();
+        if let Some((_, value)) = guard.iter().find(|(key, _)| key == name) {
+            Ok(value.clone())
+        } else {
+            Err(FsError::NotFound.into())
+        }
+    }
+
+    async fn removexattr(&self, _name: &str) -> Result<()> {
+        let mut guard = self.xattr.lock_save_irq();
+        if let Some(pos) = guard.iter().position(|(key, _)| key == _name) {
+            guard.remove(pos);
+            Ok(())
+        } else {
+            Err(FsError::NotFound.into())
+        }
+    }
+
+    async fn listxattr(&self) -> Result<Vec<String>> {
+        let guard = self.xattr.lock_save_irq();
+        Ok(guard.iter().map(|(key, _)| key.clone()).collect())
+    }
+
+    async fn setxattr(&self, name: &str, buf: &[u8], create: bool, replace: bool) -> Result<()> {
+        let mut guard = self.xattr.lock_save_irq();
+
+        if let Some((_, value)) = guard.iter_mut().find(|(key, _)| key == name) {
+            if create {
+                return Err(FsError::AlreadyExists.into());
+            }
+            *value = buf.to_vec();
+            Ok(())
+        } else {
+            if replace {
+                return Err(FsError::NotFound.into());
+            }
+            guard.push((name.to_owned(), buf.to_vec()));
+            Ok(())
+        }
+    }
 }
 
 impl<C: CpuOps> TmpFsSymlinkInode<C> {
@@ -720,6 +763,7 @@ impl<C: CpuOps> TmpFsSymlinkInode<C> {
                 nlinks: 1,
                 ..Default::default()
             }),
+            xattr: SpinLockIrq::new(Vec::new()),
         })
     }
 }

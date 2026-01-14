@@ -186,6 +186,9 @@ pub enum KernelError {
     #[error("Operation timed out")]
     TimedOut,
 
+    #[error("Value out of range")]
+    RangeError,
+
     #[error("{0}")]
     Other(&'static str),
 }
