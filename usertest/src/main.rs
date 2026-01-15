@@ -151,6 +151,50 @@ fn test_thread_with_name() {
 
 register_test!(test_thread_with_name, "Testing thread with name");
 
+fn test_mincore() {
+    use std::ptr;
+
+    unsafe {
+        let page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        assert!(page_size > 0);
+
+        // Map exactly one page, read-write, anonymous private
+        let addr = libc::mmap(
+            ptr::null_mut(),
+            page_size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if addr == libc::MAP_FAILED {
+            panic!("mmap failed: {}", std::io::Error::last_os_error());
+        }
+
+        // Touch the page to fault it in
+        ptr::write(addr as *mut u8, 42);
+
+        let mut vec_byte: u8 = 0;
+        let ret = libc::mincore(addr as *mut _, page_size, &mut vec_byte as *mut u8);
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            panic!("mincore failed: {}", err);
+        }
+        // LSB set indicates resident
+        assert!(
+            vec_byte & 0x1 == 0x1,
+            "Expected page to be resident, vec={:02x}",
+            vec_byte
+        );
+
+        // Cleanup
+        let rc = libc::munmap(addr, page_size);
+        assert_eq!(rc, 0, "munmap failed: {}", std::io::Error::last_os_error());
+    }
+}
+
+register_test!(test_mincore, "Testing mincore syscall");
+
 fn run_test(test_fn: fn()) {
     // Fork a new process to run the test
     unsafe {
@@ -167,7 +211,7 @@ fn run_test(test_fn: fn()) {
             libc::waitpid(pid, &mut status, 0);
             if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
                 panic!(
-                    "Test failed in child process: {}",
+                    "Test failed in child process: {} (this might be incorrect)",
                     std::io::Error::last_os_error()
                 );
             }

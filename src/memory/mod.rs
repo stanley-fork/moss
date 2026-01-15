@@ -10,6 +10,7 @@ use libkernel::memory::{
 
 pub mod brk;
 pub mod fault;
+pub mod mincore;
 pub mod mmap;
 pub mod page;
 pub mod process_vm;

@@ -45,6 +45,7 @@ use crate::{
     kernel::{power::sys_reboot, rand::sys_getrandom, sysinfo::sys_sysinfo, uname::sys_uname},
     memory::{
         brk::sys_brk,
+        mincore::sys_mincore,
         mmap::{sys_mmap, sys_mprotect, sys_munmap},
         process_vm::sys_process_vm_readv,
     },
@@ -511,6 +512,7 @@ pub async fn handle_syscall() {
         0xde => sys_mmap(arg1, arg2, arg3, arg4, arg5.into(), arg6).await,
         0xdf => Ok(0), // fadvise64_64 is a no-op
         0xe2 => sys_mprotect(VA::from_value(arg1 as _), arg2 as _, arg3 as _),
+        0xe8 => sys_mincore(arg1, arg2 as _, TUA::from_value(arg3 as _)).await,
         0xe9 => Ok(0), // sys_madvise is a no-op
         0x104 => {
             sys_wait4(
