@@ -145,8 +145,16 @@ impl Capabilities {
         self.ambient
     }
 
+    pub fn ambient_mut(&mut self) -> &mut CapabilitiesFlags {
+        &mut self.ambient
+    }
+
     pub fn bounding(&self) -> CapabilitiesFlags {
         self.bounding
+    }
+
+    pub fn bounding_mut(&mut self) -> &mut CapabilitiesFlags {
+        &mut self.bounding
     }
 
     /// Checks if a capability is effective, as in if it can be used.
