@@ -218,6 +218,7 @@ pub async fn handle_syscall() {
             )
             .await
         }
+        0x2b | 0x2c => Err(KernelError::NotSupported),
         0x2d => sys_truncate(TUA::from_value(arg1 as _), arg2 as _).await,
         0x2e => sys_ftruncate(arg1.into(), arg2 as _).await,
         0x30 => sys_faccessat(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
@@ -526,6 +527,7 @@ pub async fn handle_syscall() {
             .await
         }
         0x108 => sys_name_to_handle_at(),
+        0x109 => Err(KernelError::NotSupported),
         0x10b => sys_syncfs(arg1.into()).await,
         0x10e => {
             sys_process_vm_readv(
