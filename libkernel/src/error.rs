@@ -192,6 +192,9 @@ pub enum KernelError {
     #[error("Operation not supported on transport endpoint")]
     OpNotSupported,
 
+    #[error("Interrupted system call")]
+    Interrupted,
+
     #[error("{0}")]
     Other(&'static str),
 }
