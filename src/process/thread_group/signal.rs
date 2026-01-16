@@ -89,11 +89,17 @@ impl SigSet {
     /// Remove a set signal from the set, setting it to false, while respecting
     /// `mask`. Returns the ID of the removed signal.
     pub fn take_signal(&mut self, mask: SigSet) -> Option<SigId> {
-        let signal = self.difference(mask).iter().next()?;
+        let signal = self.peek_signal(mask)?;
 
-        self.remove(signal);
+        self.remove(signal.into());
 
-        Some(signal.into())
+        Some(signal)
+    }
+
+    /// Check whether a signal is set in this set while repseciting the signal
+    /// mask, `mask`. Returns the ID of the set signal.
+    pub fn peek_signal(&self, mask: SigSet) -> Option<SigId> {
+        self.difference(mask).iter().next().map(|x| x.into())
     }
 }
 
