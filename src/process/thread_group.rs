@@ -176,6 +176,29 @@ impl ThreadGroup {
             }
             _ => {
                 self.pending_signals.lock_save_irq().set_signal(signal);
+
+                // See whether there is a task that can action the signal.
+                for task in self.tasks.lock_save_irq().values() {
+                    if let Some(task) = task.upgrade()
+                        && matches!(
+                            *task.state.lock_save_irq(),
+                            TaskState::Runnable | TaskState::Running
+                        )
+                    {
+                        // Signal delivered. This task will eventually be
+                        // dispatched again by the uspc_ret code and the
+                        // signal picked up.
+                        return;
+                    }
+                }
+
+                // No task will pick up the signal. Wake one up.
+                for task in self.tasks.lock_save_irq().values() {
+                    if let Some(task) = task.upgrade() {
+                        create_waker(task.descriptor()).wake();
+                        return;
+                    }
+                }
             }
         }
     }

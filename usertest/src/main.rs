@@ -7,8 +7,12 @@ use std::{
 };
 
 use futex_bitset::test_futex_bitset;
+use signals::{
+    test_interruptible_nanosleep, test_interruptible_read_pipe, test_interruptible_waitpid,
+};
 
 mod futex_bitset;
+mod signals;
 
 fn test_sync() {
     print!("Testing sync syscall ...");
@@ -820,6 +824,9 @@ fn main() {
     run_test(test_rust_mutex);
     run_test(test_parking_lot_mutex_timeout);
     run_test(test_thread_with_name);
+    run_test(test_interruptible_nanosleep);
+    run_test(test_interruptible_read_pipe);
+    run_test(test_interruptible_waitpid);
     let end = std::time::Instant::now();
     println!("All tests passed in {} ms", (end - start).as_millis());
 }

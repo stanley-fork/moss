@@ -76,12 +76,6 @@ fn schedule() {
     SCHED_STATE.borrow_mut().do_schedule();
 }
 
-/// Set the force resched task for this CPU. This ensures that the next time
-/// schedule() is called a full run of the schduling algorithm will occur.
-fn force_resched() {
-    SCHED_STATE.borrow_mut().force_resched = true;
-}
-
 pub fn spawn_kernel_work(fut: impl Future<Output = ()> + 'static + Send) {
     current_task().ctx.put_kernel_work(Box::pin(fut));
 }
@@ -282,15 +276,12 @@ impl SchedState {
             needs_resched = true;
         }
 
-        if !needs_resched {
-            // Fast Path: Only return if we have a valid task, it has budget,
-            // AND it's not the idle task.
-            //
-            // Ensure that, in a debug build, we are only taking the fast-path
-            // on a *running* task.
-            if let Some(current) = self.run_q.current_mut() {
-                debug_assert_eq!(*current.state.lock_save_irq(), TaskState::Running);
-            }
+        if !needs_resched
+            && let Some(current) = self.run_q.current()
+            && matches!(*current.state.lock_save_irq(), TaskState::Running)
+        {
+            // Fast Path: Only return if we have a valid task (Running state),
+            // it has budget, AND it's not the idle task.
             return;
         }
 

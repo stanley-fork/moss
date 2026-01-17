@@ -1,4 +1,4 @@
-use super::{current::current_task, force_resched, schedule, waker::create_waker};
+use super::{current::current_task, schedule, waker::create_waker};
 use crate::{
     arch::{Arch, ArchImpl},
     process::{
@@ -128,7 +128,6 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                                 // task.
                                 // Task is currently running or is runnable and will now sleep.
                                 TaskState::Running | TaskState::Runnable => {
-                                    force_resched();
                                     *task_state = TaskState::Sleeping;
                                 }
                                 // If we were woken between the future returning
@@ -142,9 +141,7 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                                 // If the task finished concurrently while we were
                                 // polling its signal work, let the scheduler
                                 // pick another task; no further work to do here.
-                                TaskState::Finished => {
-                                    force_resched();
-                                }
+                                TaskState::Finished => {}
                                 // We should never get here for any other state.
                                 s => {
                                     unreachable!(
@@ -178,9 +175,6 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                             // find another task to execute, removing this task
                             // from the runqueue, reaping it's resouces.
                             if task.state.lock_save_irq().is_finished() {
-                                // Ensure we don't take the fast-path sched exit
-                                // for a finished task.
-                                force_resched();
                                 state = State::PickNewTask;
                                 continue;
                             }
@@ -207,7 +201,6 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                             match *task_state {
                                 // Task is runnable or running, put it to sleep.
                                 TaskState::Running | TaskState::Runnable => {
-                                    force_resched();
                                     *task_state = TaskState::Sleeping
                                 }
                                 // If we were woken between the future returning
@@ -221,9 +214,7 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                                 // Task finished concurrently while we were trying
                                 // to put it to sleep; just reschedule and let
                                 // teardown handle it.
-                                TaskState::Finished => {
-                                    force_resched();
-                                }
+                                TaskState::Finished => {}
                                 // We should never get here for any other state.
                                 s => {
                                     unreachable!(
@@ -255,8 +246,6 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                             ptrace.set_waker(create_waker(task.descriptor()));
 
                             *task.state.lock_save_irq() = TaskState::Stopped;
-                            force_resched();
-
                             state = State::PickNewTask;
                             continue 'dispatch;
                         }
@@ -299,7 +288,6 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                                     }
                                 }
 
-                                force_resched();
                                 state = State::PickNewTask;
                                 continue 'dispatch;
                             }

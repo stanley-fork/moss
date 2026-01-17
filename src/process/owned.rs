@@ -144,4 +144,15 @@ impl OwnedTask {
                 .take_signal(self.sig_mask)
         })
     }
+
+    /// Check for a pending signal from this task's pending signal queue, or the
+    /// process's pending signal queue, while repsecting the signal mask.
+    pub fn peek_signal(&self) -> Option<SigId> {
+        self.pending_signals.peek_signal(self.sig_mask).or_else(|| {
+            self.process
+                .pending_signals
+                .lock_save_irq()
+                .peek_signal(self.sig_mask)
+        })
+    }
 }

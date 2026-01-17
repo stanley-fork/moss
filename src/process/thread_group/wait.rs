@@ -1,3 +1,7 @@
+use super::{
+    Pgid, Tgid, ThreadGroup,
+    signal::{InterruptResult, Interruptable, SigId},
+};
 use crate::clock::timespec::TimeSpec;
 use crate::memory::uaccess::copy_to_user;
 use crate::sched::current::current_task_shared;
@@ -9,10 +13,6 @@ use libkernel::{
     error::{KernelError, Result},
     memory::address::TUA,
 };
-
-use super::Tgid;
-use super::signal::SigId;
-use super::{Pgid, ThreadGroup};
 
 pub type PidT = i32;
 
@@ -201,11 +201,17 @@ pub async fn sys_wait4(
             None => return Ok(0),
         }
     } else {
-        task.process
+        match task
+            .process
             .child_notifiers
             .inner
             .wait_until(|state| do_wait(state, pid, flags))
+            .interruptable()
             .await
+        {
+            InterruptResult::Interrupted => return Err(KernelError::Interrupted),
+            InterruptResult::Uninterrupted(r) => r,
+        }
     };
 
     if !stat_addr.is_null() {

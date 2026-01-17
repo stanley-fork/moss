@@ -1,23 +1,35 @@
-use libkernel::{error::Result, memory::address::TUA};
+use super::thread_group::signal::{InterruptResult, Interruptable};
+use crate::{
+    clock::timespec::TimeSpec,
+    drivers::timer::{now, sleep},
+    memory::uaccess::copy_to_user,
+};
+use core::time::Duration;
+use libkernel::{
+    error::{KernelError, Result},
+    memory::address::TUA,
+};
 
-use crate::{clock::timespec::TimeSpec, drivers::timer::sleep};
+pub async fn sys_nanosleep(rqtp: TUA<TimeSpec>, rmtp: TUA<TimeSpec>) -> Result<usize> {
+    let timespec: Duration = TimeSpec::copy_from_user(rqtp).await?.into();
+    let started_at = now().unwrap();
 
-pub async fn sys_nanosleep(rqtp: TUA<TimeSpec>, _rmtp: TUA<TimeSpec>) -> Result<usize> {
-    let timespec = TimeSpec::copy_from_user(rqtp).await?;
-
-    sleep(timespec.into()).await;
-
-    Ok(0)
+    match sleep(timespec).interruptable().await {
+        InterruptResult::Interrupted => {
+            if !rmtp.is_null() {
+                let elapsed = now().unwrap() - started_at;
+                copy_to_user(rmtp, (timespec - elapsed).into()).await?;
+            }
+            Err(KernelError::Interrupted)
+        }
+        InterruptResult::Uninterrupted(()) => Ok(0),
+    }
 }
 
 pub async fn sys_clock_nanosleep(
     _clock_id: i32,
     rqtp: TUA<TimeSpec>,
-    _rmtp: TUA<TimeSpec>,
+    rmtp: TUA<TimeSpec>,
 ) -> Result<usize> {
-    let timespec = TimeSpec::copy_from_user(rqtp).await?;
-
-    sleep(timespec.into()).await;
-
-    Ok(0)
+    sys_nanosleep(rqtp, rmtp).await
 }

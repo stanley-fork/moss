@@ -1,15 +1,14 @@
+use crate::{memory::uaccess::UserCopyable, sched::current::current_task};
+use bitflags::bitflags;
 use core::{
     alloc::Layout,
     fmt::Display,
     mem::transmute,
     ops::{Index, IndexMut},
+    task::{Poll, ready},
 };
-
-use bitflags::bitflags;
 use ksigaction::{KSignalAction, UserspaceSigAction};
 use libkernel::memory::{address::UA, region::UserMemoryRegion};
-
-use crate::memory::uaccess::UserCopyable;
 
 pub mod kill;
 pub mod ksigaction;
@@ -89,11 +88,17 @@ impl SigSet {
     /// Remove a set signal from the set, setting it to false, while respecting
     /// `mask`. Returns the ID of the removed signal.
     pub fn take_signal(&mut self, mask: SigSet) -> Option<SigId> {
-        let signal = self.difference(mask).iter().next()?;
+        let signal = self.peek_signal(mask)?;
 
-        self.remove(signal);
+        self.remove(signal.into());
 
-        Some(signal.into())
+        Some(signal)
+    }
+
+    /// Check whether a signal is set in this set while repseciting the signal
+    /// mask, `mask`. Returns the ID of the set signal.
+    pub fn peek_signal(&self, mask: SigSet) -> Option<SigId> {
+        self.difference(mask).iter().next().map(|x| x.into())
     }
 }
 
@@ -249,4 +254,63 @@ impl SignalActionState {
             }
         }
     }
+}
+
+pub trait Interruptable<T, F: Future<Output = T>> {
+    /// Mark this operation as interruptable.
+    ///
+    /// When a signal is delivered to this process/task while it is `Sleeping`,
+    /// it may be woken up if there are no running tasks to deliver the signal
+    /// to. If a task is running an `interruptable()` future, then the
+    /// underlying future's execution will be short-circuted by the delivery of
+    /// a signal. If the kernel is running a non-`interruptable()` future, then
+    /// the signal delivery is deferred until either an `interruptable()`
+    /// operation is executed or the system call has finished.
+    ///
+    /// `.await`ing a `interruptable()`-wrapped future returns a
+    /// [InterruptResult].
+    fn interruptable(self) -> InterruptableFut<T, F>;
+}
+
+/// A wrapper for a long-running future, allowing it to be interrupted by a
+/// signal.
+pub struct InterruptableFut<T, F: Future<Output = T>> {
+    sub_fut: F,
+}
+
+impl<T, F: Future<Output = T>> Interruptable<T, F> for F {
+    fn interruptable(self) -> InterruptableFut<T, F> {
+        // TODO: Set the task state to a new variant `Interruptable`. This
+        // allows the `deliver_signal` code to wake up a task to deliver a
+        // signal to where it will be actioned.
+        InterruptableFut { sub_fut: self }
+    }
+}
+
+impl<T, F: Future<Output = T>> Future for InterruptableFut<T, F> {
+    type Output = InterruptResult<T>;
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        if current_task().peek_signal().is_some() {
+            Poll::Ready(InterruptResult::Interrupted)
+        } else {
+            unsafe {
+                let val = ready!(self.map_unchecked_mut(|f| &mut f.sub_fut).poll(cx));
+                Poll::Ready(InterruptResult::Uninterrupted(val))
+            }
+        }
+    }
+}
+
+/// The result of running an interruptable operation within the kernel.
+pub enum InterruptResult<T> {
+    /// The operation was interrupted due to the delivery of the specified
+    /// signal. The system call would normally short-circuit and return -EINTR
+    /// at this point.
+    Interrupted,
+    /// The underlying future completed without interruption.
+    Uninterrupted(T),
 }

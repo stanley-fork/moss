@@ -1,7 +1,10 @@
 use crate::{
     kernel::kpipe::KPipe,
     memory::uaccess::copy_to_user,
-    process::{fd_table::Fd, thread_group::signal::SigId},
+    process::{
+        fd_table::Fd,
+        thread_group::signal::{InterruptResult, Interruptable, SigId},
+    },
     sched::current::current_task,
     sync::CondVar,
 };
@@ -42,7 +45,7 @@ impl PipeReader {
                     .wait_until(|gone| if *gone { Some(()) } else { None })
             );
 
-        future::poll_fn(move |cx| {
+        match future::poll_fn(move |cx| {
             // Check the consumption future first, before we check whether the
             // other side of the pipe has gone. This ensures we drain the buffer
             // first.
@@ -54,7 +57,12 @@ impl PipeReader {
                 Poll::Pending
             }
         })
+        .interruptable()
         .await
+        {
+            InterruptResult::Interrupted => Err(KernelError::Interrupted),
+            InterruptResult::Uninterrupted(r) => r,
+        }
     }
 }
 

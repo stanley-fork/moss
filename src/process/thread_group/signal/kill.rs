@@ -99,7 +99,7 @@ pub fn send_signal_to_pg(pgid: Pgid, signal: SigId) {
         if let Some(tg) = tg_weak.upgrade()
             && *tg.pgid.lock_save_irq() == pgid
         {
-            tg.pending_signals.lock_save_irq().set_signal(signal);
+            tg.deliver_signal(signal);
         }
     }
 }
