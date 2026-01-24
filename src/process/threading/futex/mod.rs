@@ -1,6 +1,7 @@
 use crate::clock::realtime::date;
 use crate::clock::timespec::TimeSpec;
 use crate::drivers::timer::sleep;
+use crate::process::thread_group::signal::{InterruptResult, Interruptable};
 use crate::sync::{OnceLock, SpinLock};
 use alloc::boxed::Box;
 use alloc::{collections::btree_map::BTreeMap, sync::Arc};
@@ -119,14 +120,19 @@ pub async fn sys_futex(
                 }
             };
 
-            do_futex_wait(
+            match do_futex_wait(
                 key,
                 uaddr,
                 val,
                 if cmd == FUTEX_WAIT { u32::MAX } else { val3 },
                 timeout,
             )
+            .interruptable()
             .await
+            {
+                InterruptResult::Interrupted => Err(KernelError::Interrupted),
+                InterruptResult::Uninterrupted(v) => v,
+            }
         }
 
         FUTEX_WAKE | FUTEX_WAKE_BITSET => Ok(wake_key(
