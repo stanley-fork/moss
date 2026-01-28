@@ -143,6 +143,9 @@ fn arch_init_secondary(ctx_frame: *mut ExceptionState) -> *mut ExceptionState {
     TCR_EL1.modify(TCR_EL1::EPD0::DisableTTBR0Walks);
     barrier::isb(barrier::SY);
 
+    // Don't trap secondaries wfi/wfe in el0.
+    SCTLR_EL1.modify(SCTLR_EL1::NTWE::DontTrap + SCTLR_EL1::NTWI::DontTrap);
+
     // Enable interrupts and exceptions.
     secondary_exceptions_init();
 
