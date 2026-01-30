@@ -587,6 +587,12 @@ fn test_rust_file() {
             .expect("Failed to read from file");
         assert_eq!(contents, "Hello, Rust!");
     }
+    fs::hard_link(path, "/tmp/rust_fs_test_link.txt").expect("Failed to create hard link");
+    let metadata = fs::metadata(path).expect("Failed to get metadata");
+    assert_eq!(metadata.len(), 12);
+    fs::rename("/tmp/rust_fs_test_link.txt", "/tmp/rust_fs_test_renamed.txt")
+        .expect("Failed to rename file");
+    fs::remove_file("/tmp/rust_fs_test_renamed.txt").expect("Failed to delete renamed file");
     fs::remove_file(path).expect("Failed to delete file");
 }
 
