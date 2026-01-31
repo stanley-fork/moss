@@ -21,19 +21,17 @@
 //! - All raw pointer manipulations are internal and guarded.
 //! - Growth of region lists is marked `unsafe` to ensure critical reservations
 //!   are made before potentially reallocating region list memory.
+use crate::error::{KernelError, Result};
+use crate::memory::{PAGE_SHIFT, PAGE_SIZE};
+use crate::memory::{
+    address::{AddressTranslator, PA},
+    page::PageFrame,
+    region::PhysMemoryRegion,
+};
 use core::{
     iter::Peekable,
     marker::PhantomData,
     ops::{Index, IndexMut},
-};
-
-use crate::error::{KernelError, Result};
-
-use super::{
-    PAGE_SHIFT, PAGE_SIZE,
-    address::{AddressTranslator, PA},
-    page::PageFrame,
-    region::PhysMemoryRegion,
 };
 
 #[derive(Clone)]

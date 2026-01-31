@@ -10,8 +10,8 @@ use crate::{
     memory::{
         PAGE_SIZE,
         address::{AddressTranslator, VA},
+        allocators::phys::PageAllocGetter,
         page::ClaimedPage,
-        page_alloc::PageAllocGetter,
     },
     sync::spinlock::SpinLockIrq,
 };
@@ -827,10 +827,11 @@ where
 mod tests {
     use super::*;
     use crate::fs::{FileType, InodeId, attr::FilePermissions};
+    use crate::memory::allocators::phys::FrameAllocator;
+    use crate::memory::allocators::phys::tests::TestFixture;
     use crate::memory::{
         PAGE_SIZE,
         address::IdentityTranslator,
-        page_alloc::{self, FrameAllocator, PageAllocGetter},
     };
     use crate::sync::once_lock::OnceLock;
     use crate::test::MockCpuOps;
@@ -851,7 +852,7 @@ mod tests {
     fn init_allocator() {
         PG_ALLOC.get_or_init(|| {
             // Allocate 32MB for the test heap to ensure we don't run out during large file tests
-            page_alloc::tests::TestFixture::new(&[(0, 32 * 1024 * 1024)], &[]).leak_allocator()
+            TestFixture::new(&[(0, 32 * 1024 * 1024)], &[]).leak_allocator()
         });
     }
 

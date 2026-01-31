@@ -2,7 +2,7 @@ use crate::memory::PageOffsetTranslator;
 use libkernel::{
     arch::arm64::memory::pg_tables::{PageAllocator, PgTable, PgTableArray},
     error::Result,
-    memory::{PAGE_SIZE, address::TPA, smalloc::Smalloc},
+    memory::{PAGE_SIZE, address::TPA, allocators::smalloc::Smalloc},
 };
 
 pub struct SmallocPageAlloc<'a> {

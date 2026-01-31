@@ -1,71 +1,27 @@
 use crate::{
     CpuOps,
     error::{KernelError, Result},
-    memory::{PAGE_SHIFT, address::AddressTranslator, page::PageFrame, smalloc::Smalloc},
+    memory::{
+        PAGE_SHIFT, address::AddressTranslator, allocators::frame::FrameState, page::PageFrame,
+        region::PhysMemoryRegion,
+    },
     sync::{once_lock::OnceLock, spinlock::SpinLockIrq},
 };
 use core::{
     cmp::min,
     mem::{MaybeUninit, size_of, transmute},
 };
-use intrusive_collections::{LinkedList, LinkedListLink, UnsafeRef, intrusive_adapter};
+use intrusive_collections::{LinkedList, UnsafeRef};
 use log::info;
 
-use super::region::PhysMemoryRegion;
+use super::{
+    frame::{AllocatedInfo, Frame, FrameAdapter, TailInfo},
+    smalloc::Smalloc,
+};
 
 // The maximum order for the buddy system. This corresponds to blocks of size
 // 2^MAX_ORDER pages.
 const MAX_ORDER: usize = 10;
-
-#[derive(Clone, Copy, Debug)]
-pub struct AllocatedInfo {
-    /// Current ref count of the allocated block.
-    pub ref_count: u32,
-    /// The order of the entire allocated block.
-    pub order: u8,
-}
-
-/// Holds metadata for a page that is part of an allocated block but is not the head.
-/// It simply points back to the head of the block.
-#[derive(Clone, Copy, Debug)]
-pub struct TailInfo {
-    pub head: PageFrame,
-}
-
-#[derive(Debug, Clone)]
-pub enum FrameState {
-    /// The frame has not yet been processed by the allocator's init function.
-    Uninitialized,
-    /// The frame is the head of a free block of a certain order.
-    Free { order: u8 },
-    /// The frame is the head of an allocated block.
-    AllocatedHead(AllocatedInfo),
-    /// The frame is a tail page of an allocated block.
-    AllocatedTail(TailInfo),
-    /// The frame is reserved by hardware/firmware.
-    Reserved,
-    /// The frame is part of the kernel's own image.
-    Kernel,
-}
-
-#[derive(Debug, Clone)]
-struct Frame {
-    state: FrameState,
-    link: LinkedListLink, // only used in free nodes.
-    pfn: PageFrame,
-}
-
-intrusive_adapter!(FrameAdapter = UnsafeRef<Frame>: Frame { link: LinkedListLink });
-
-impl Frame {
-    fn new(pfn: PageFrame) -> Self {
-        Self {
-            state: FrameState::Uninitialized,
-            link: LinkedListLink::new(),
-            pfn,
-        }
-    }
-}
 
 struct FrameAllocatorInner {
     pages: &'static mut [Frame],
@@ -443,9 +399,7 @@ pub mod tests {
     use super::*;
     use crate::{
         memory::{
-            address::{IdentityTranslator, PA},
-            region::PhysMemoryRegion,
-            smalloc::{RegionList, Smalloc},
+            address::{IdentityTranslator, PA}, allocators::smalloc::RegionList, region::PhysMemoryRegion
         },
         test::MockCpuOps,
     };

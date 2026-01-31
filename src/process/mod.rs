@@ -21,14 +21,13 @@ use fd_table::FileDescriptorTable;
 use libkernel::{
     UserAddressSpace, VirtualMemory,
     error::{KernelError, Result},
-    fs::Inode,
+    fs::{Inode, pathbuf::PathBuf},
     memory::{
         address::{UA, VA},
-        page_alloc::PageAllocation,
-        proc_vm::vmarea::AccessKind,
+        allocators::phys::PageAllocation,
+        proc_vm::{ProcessVM, vmarea::AccessKind},
     },
 };
-use libkernel::{fs::pathbuf::PathBuf, memory::proc_vm::ProcessVM};
 use ptrace::PTrace;
 use thread_group::{Tgid, ThreadGroup};
 

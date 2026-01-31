@@ -27,7 +27,7 @@ use libkernel::{
     error::Result,
     memory::{
         address::{PA, TPA, VA},
-        page_alloc::FrameAllocator,
+        allocators::phys::FrameAllocator,
     },
     sync::per_cpu::setup_percpu,
 };

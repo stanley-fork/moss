@@ -3,9 +3,11 @@ use crate::{
     sync::{OnceLock, SpinLock},
 };
 use libkernel::memory::{
-    page_alloc::FrameAllocator,
+    allocators::{
+        phys::FrameAllocator,
+        smalloc::{RegionList, Smalloc},
+    },
     region::PhysMemoryRegion,
-    smalloc::{RegionList, Smalloc},
 };
 
 pub mod brk;

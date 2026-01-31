@@ -1,5 +1,8 @@
 use super::{
-    PAGE_SHIFT, address::AddressTranslator, page_alloc::PageAllocGetter, region::PhysMemoryRegion,
+    PAGE_SHIFT,
+    address::AddressTranslator,
+    allocators::phys::{PageAllocGetter, PageAllocation},
+    region::PhysMemoryRegion,
 };
 use crate::{
     CpuOps,
@@ -7,7 +10,6 @@ use crate::{
     memory::{
         PAGE_SIZE,
         address::{PA, VA},
-        page_alloc::PageAllocation,
     },
 };
 use alloc::slice;
