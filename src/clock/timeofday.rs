@@ -32,8 +32,11 @@ pub async fn sys_gettimeofday(tv: TUA<TimeSpec>, tz: TUA<TimeZone>) -> Result<us
 }
 
 pub async fn sys_settimeofday(tv: TUA<TimeSpec>, _tz: TUA<TimeZone>) -> Result<usize> {
-    let time: TimeSpec = copy_from_user(tv).await?;
-    let duration: Duration = time.into();
-    set_date(duration);
+    // TODO: Handle timezone
+    if !tv.is_null() {
+        let time: TimeSpec = copy_from_user(tv).await?;
+        let duration: Duration = time.into();
+        set_date(duration);
+    }
     Ok(0)
 }
