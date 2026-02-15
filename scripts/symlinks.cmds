@@ -405,3 +405,4 @@ symlink /bin/xzcat /bin/busybox
 symlink /bin/yes /bin/busybox
 symlink /bin/zcat /bin/busybox
 symlink /bin/zcip /bin/busybox
+quit
