@@ -37,12 +37,12 @@ musl programs are built by default.
 If you want GNU program builds:
 ```bash
 stdlib=gnu ./scripts/mac-experimental/build-deps.sh
- ```
+```
 
 After building, you can make the initrd with:
 ```bash
 ./scripts/mac-experimental/create-image.sh
- ```
+```
 
 The initrd should now be at `./moss.img`.
 
