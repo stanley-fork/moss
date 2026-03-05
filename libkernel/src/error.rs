@@ -23,6 +23,10 @@ pub enum ProbeError {
     // Driver probing should be tried again after other probes have succeeded.
     #[error("Driver probing deferred for other dependencies")]
     Deferred,
+
+    // Device inspected but not a match for this driver; skip silently.
+    #[error("Device not matched by driver")]
+    NoMatch,
 }
 
 #[derive(Debug, Error, PartialEq, Eq, Clone)]

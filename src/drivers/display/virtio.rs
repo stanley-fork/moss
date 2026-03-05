@@ -127,15 +127,15 @@ fn virtio_gpu_probe(_dm: &mut DriverManager, d: DeviceDescriptor) -> Result<Arc<
 
             // Construct the transport first; it can report its device type.
             let transport = unsafe {
-                MmioTransport::new(header, size).map_err(|e| {
-                    log::error!("Failed to initialize virtio-mmio transport: {e}");
-                    KernelError::Other("virtio-mmio transport init failed")
-                })?
+                match MmioTransport::new(header, size) {
+                    Ok(t) => t,
+                    Err(_) => return Err(KernelError::Probe(ProbeError::NoMatch)),
+                }
             };
 
             // Only bind to GPU here; other virtio-mmio devices should be handled by their own drivers.
             if !matches!(transport.device_type(), DeviceType::GPU) {
-                return Err(KernelError::Probe(ProbeError::Deferred));
+                return Err(KernelError::Probe(ProbeError::NoMatch));
             }
 
             if mapped != VA::from_value(0xffffd00000f92e00) {

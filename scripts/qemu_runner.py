@@ -41,8 +41,11 @@ default_args = {
     "-nographic": None,
     "-s": None,
     "-kernel": bin_executable_location,
-    "-append": f"{append_args} --rootfs=ext4fs --automount=/dev,devfs --automount=/tmp,tmpfs --automount=/proc,procfs --automount=/sys,sysfs"
+    "-append": f"{append_args} --rootfs=ext4fs --automount=/dev,devfs --automount=/tmp,tmpfs --automount=/proc,procfs --automount=/sys,sysfs",
 }
+
+# Arguments that can appear multiple times (e.g. -device)
+extra_args = ["-device", "virtio-rng-device"]
 
 if args.debug:
     default_args["-S"] = None
@@ -53,7 +56,7 @@ if args.display:
     default_args["-nic"] = "none"
     # Add uart
     default_args["-serial"] = "stdio"
-    default_args["-device"] = "virtio-gpu-device"
+    extra_args += ["-device", "virtio-gpu-device"]
 
 qemu_command = ["qemu-system-aarch64"]
 
@@ -61,5 +64,7 @@ for key, value in default_args.items():
     qemu_command.append(key)
     if value is not None:
         qemu_command.append(value)
+
+qemu_command += extra_args
 
 subprocess.run(qemu_command, check=True)

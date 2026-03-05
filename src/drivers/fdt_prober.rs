@@ -73,6 +73,9 @@ pub fn probe_for_fdt_devices() {
                 Err(KernelError::Probe(ProbeError::Deferred)) => {
                     deferred_list.push(desc);
                 }
+                Err(KernelError::Probe(ProbeError::NoMatch)) => {
+                    // Driver inspected the device but it's not a match; skip silently.
+                }
                 Ok(None) => {
                     // No driver found for this compatible string. Not an error, just ignore.
                 }
