@@ -1,6 +1,6 @@
 use crate::fs::open_file::FileCtx;
 use crate::kernel::kpipe::KPipe;
-use crate::memory::uaccess::copy_to_user_slice;
+use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
 use crate::net::sops::{RecvFlags, SendFlags};
 use crate::net::{SockAddr, SockAddrUn, SocketOps};
 use crate::sync::SpinLock;
@@ -18,7 +18,6 @@ use libkernel::error::{FsError, KernelError, Result};
 use libkernel::memory::address::UA;
 
 struct Message {
-    #[allow(unused)]
     sender: SockAddrUn,
     data: Vec<u8>,
 }
@@ -44,7 +43,7 @@ impl Inbox {
             Inbox::Pipe(pipe) => pipe.copy_from_user(buf, count).await,
             Inbox::Datagram(queue) => {
                 let mut data = vec![0u8; count];
-                copy_to_user_slice(&mut data, buf).await?;
+                copy_from_user_slice(buf, &mut data).await?;
                 let msg = Message {
                     sender: origin,
                     data,
@@ -55,17 +54,17 @@ impl Inbox {
         }
     }
 
-    async fn recv(&self, buf: UA, count: usize) -> Result<usize> {
+    async fn recv(&self, buf: UA, count: usize) -> Result<(usize, Option<SockAddrUn>)> {
         match self {
-            Inbox::Pipe(pipe) => pipe.copy_to_user(buf, count).await,
+            Inbox::Pipe(pipe) => Ok((pipe.copy_to_user(buf, count).await?, None)),
             Inbox::Datagram(queue) => {
                 let mut q = queue.lock().await;
                 if let Some(msg) = q.pop_front() {
                     let n = msg.data.len().min(count);
                     copy_to_user_slice(&msg.data[..n], buf).await?;
-                    Ok(n)
+                    Ok((n, Some(msg.sender)))
                 } else {
-                    Ok(0)
+                    Ok((0, None))
                 }
             }
         }
@@ -301,14 +300,17 @@ impl SocketOps for UnixSocket {
         buf: UA,
         count: usize,
         _flags: RecvFlags,
-    ) -> Result<usize> {
+    ) -> Result<(usize, Option<SockAddr>)> {
         if count == 0 {
-            return Ok(0);
+            return Ok((0, None));
         }
         if *self.rd_shutdown.lock_save_irq() {
-            return Ok(0);
+            return Ok((0, None));
         }
-        self.inbox.recv(buf, count).await
+        self.inbox.recv(buf, count).await.map(|(n, peer)| {
+            let peer_addr = peer.map(SockAddr::Un);
+            (n, peer_addr)
+        })
     }
 
     async fn recvfrom(
@@ -320,7 +322,7 @@ impl SocketOps for UnixSocket {
         _addr: Option<SockAddr>,
     ) -> Result<(usize, Option<SockAddr>)> {
         let n = self.recv(ctx, buf, count, flags).await?;
-        Ok((n, None))
+        Ok(n)
     }
 
     async fn send(
