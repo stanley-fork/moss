@@ -1,8 +1,7 @@
-use super::{current::current_task, schedule, waker::create_waker};
+use super::{current::current_task, current_work, current_work_waker, schedule};
 use crate::{
     arch::{Arch, ArchImpl},
     process::{
-        TaskState,
         ctx::UserCtx,
         exit::kernel_exit_with_signal,
         thread_group::{
@@ -12,12 +11,21 @@ use crate::{
     },
 };
 use alloc::boxed::Box;
-use core::{ptr, task::Poll};
+use core::{ptr, sync::atomic::Ordering, task::Poll};
 
 enum State {
     PickNewTask,
     ProcessKernelWork,
     ReturnToUserspace,
+}
+
+/// Try to transition the current task from Running to PendingSleep atomically.
+///
+/// Returns `true` if the task should go to sleep (state set to PendingSleep or
+/// task is Finished). Returns `false` if the task was woken concurrently
+/// and should re-process its kernel work instead.
+fn try_sleep_current() -> bool {
+    current_work().state.try_pending_sleep()
 }
 
 /// Prepares the kernel for a safe return to userspace, guaranteeing a valid
@@ -84,13 +92,9 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
             State::ProcessKernelWork => {
                 // First, let's handle signals. If there is any scheduled signal
                 // work (this has to be async to handle faults, etc).
-                let (signal_work, desc, is_idle) = {
+                let (signal_work, is_idle) = {
                     let mut task = current_task();
-                    (
-                        task.ctx.take_signal_work(),
-                        task.descriptor(),
-                        task.is_idle_task(),
-                    )
+                    (task.ctx.take_signal_work(), task.is_idle_task())
                 };
 
                 if let Some(mut signal_work) = signal_work {
@@ -100,7 +104,7 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
 
                     match signal_work
                         .as_mut()
-                        .poll(&mut core::task::Context::from_waker(&create_waker(desc)))
+                        .poll(&mut core::task::Context::from_waker(&current_work_waker()))
                     {
                         Poll::Ready(Ok(state)) => {
                             // Signal actioning is complete. Return to userspace.
@@ -118,39 +122,13 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                             continue;
                         }
                         Poll::Pending => {
-                            let mut task = current_task();
+                            current_task().ctx.put_signal_work(signal_work);
 
-                            task.ctx.put_signal_work(signal_work);
-                            let mut task_state = task.state.lock_save_irq();
-
-                            match *task_state {
-                                // The main path we expect to take to sleep the
-                                // task.
-                                // Task is currently running or is runnable and will now sleep.
-                                TaskState::Running | TaskState::Runnable => {
-                                    *task_state = TaskState::Sleeping;
-                                }
-                                // If we were woken between the future returning
-                                // `Poll::Pending` and acquiring the lock above,
-                                // the waker will have put us into this state.
-                                // Transition back to `Running` since we're
-                                // ready to progress with more work.
-                                TaskState::Woken => {
-                                    *task_state = TaskState::Running;
-                                }
-                                // If the task finished concurrently while we were
-                                // polling its signal work, let the scheduler
-                                // pick another task; no further work to do here.
-                                TaskState::Finished => {}
-                                // We should never get here for any other state.
-                                s => {
-                                    unreachable!(
-                                        "Unexpected task state {s:?} during signal task sleep"
-                                    );
-                                }
+                            if try_sleep_current() {
+                                state = State::PickNewTask;
+                            } else {
+                                state = State::ProcessKernelWork;
                             }
-
-                            state = State::PickNewTask;
                             continue;
                         }
                     }
@@ -165,16 +143,14 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
 
                     match kern_work
                         .as_mut()
-                        .poll(&mut core::task::Context::from_waker(&create_waker(desc)))
+                        .poll(&mut core::task::Context::from_waker(&current_work_waker()))
                     {
                         Poll::Ready(()) => {
-                            let task = current_task();
-
                             // If the task just exited (entered the finished
                             // state), don't return to it's userspace, instead,
                             // find another task to execute, removing this task
                             // from the runqueue, reaping it's resouces.
-                            if task.state.lock_save_irq().is_finished() {
+                            if current_work().state.load(Ordering::Acquire).is_finished() {
                                 state = State::PickNewTask;
                                 continue;
                             }
@@ -188,41 +164,13 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                             continue;
                         }
                         Poll::Pending => {
-                            let mut task = current_task();
+                            current_task().ctx.put_kernel_work(kern_work);
 
-                            // Kernel work hasn't finished. A wake up should
-                            // have been scheduled by the future. Replace the
-                            // kernel work context back into the task, set it's
-                            // state to sleeping so it's not scheduled again and
-                            // search for another task to execute.
-                            task.ctx.put_kernel_work(kern_work);
-                            let mut task_state = task.state.lock_save_irq();
-
-                            match *task_state {
-                                // Task is runnable or running, put it to sleep.
-                                TaskState::Running | TaskState::Runnable => {
-                                    *task_state = TaskState::Sleeping;
-                                }
-                                // If we were woken between the future returning
-                                // `Poll::Pending` and acquiring the lock above,
-                                // the waker will have put us into this state.
-                                // Transition back to `Running` since we're
-                                // ready to progress with more work.
-                                TaskState::Woken => {
-                                    *task_state = TaskState::Running;
-                                }
-                                // Task finished concurrently while we were trying
-                                // to put it to sleep; just reschedule and let
-                                // teardown handle it.
-                                TaskState::Finished => {}
-                                // We should never get here for any other state.
-                                s => {
-                                    unreachable!(
-                                        "Unexpected task state {s:?} during kernel task sleep"
-                                    );
-                                }
+                            if try_sleep_current() {
+                                state = State::PickNewTask;
+                            } else {
+                                state = State::ProcessKernelWork;
                             }
-                            state = State::PickNewTask;
                             continue;
                         }
                     }
@@ -242,11 +190,17 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                     while let Some(signal) = task.take_signal() {
                         let mut ptrace = task.ptrace.lock_save_irq();
                         if ptrace.trace_signal(signal, task.ctx.user()) {
+                            ptrace.set_waker(current_work_waker());
                             ptrace.notify_tracer_of_trap(&task.process);
-                            ptrace.set_waker(create_waker(task.descriptor()));
+                            drop(ptrace);
+                            drop(task);
 
-                            *task.state.lock_save_irq() = TaskState::Stopped;
-                            state = State::PickNewTask;
+                            if current_work().state.try_pending_stop() {
+                                state = State::PickNewTask;
+                            } else {
+                                // Woken concurrently (tracer already resumed us).
+                                state = State::ProcessKernelWork;
+                            }
                             continue 'dispatch;
                         }
                         drop(ptrace);
@@ -284,7 +238,7 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
 
                                 for thr_weak in process.tasks.lock_save_irq().values() {
                                     if let Some(thr) = thr_weak.upgrade() {
-                                        *thr.state.lock_save_irq() = TaskState::Stopped;
+                                        thr.state.try_pending_stop();
                                     }
                                 }
 
@@ -294,13 +248,10 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                             Some(KSignalAction::Continue) => {
                                 let process = &task.process;
 
-                                // Wake up all sleeping threads in the process.
+                                // Wake up all stopped/sleeping threads in the process.
                                 for thr_weak in process.tasks.lock_save_irq().values() {
                                     if let Some(thr) = thr_weak.upgrade() {
-                                        let mut st = thr.state.lock_save_irq();
-                                        if *st == TaskState::Sleeping {
-                                            *st = TaskState::Runnable;
-                                        }
+                                        crate::sched::waker::create_waker(thr).wake();
                                     }
                                 }
 

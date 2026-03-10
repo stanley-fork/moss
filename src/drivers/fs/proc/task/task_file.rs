@@ -93,7 +93,7 @@ impl SimpleFile for ProcTaskFileInode {
         };
 
         let status_string = if let Some(task) = task_details {
-            let state = *task.state.lock_save_irq();
+            let state = task.state.load(core::sync::atomic::Ordering::Relaxed);
             let name = task.comm.lock_save_irq();
             match self.file_type {
                 TaskFileType::Status => format!(

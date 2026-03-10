@@ -2,7 +2,7 @@ use crate::{
     per_cpu_private,
     process::{Task, owned::OwnedTask},
 };
-use alloc::{boxed::Box, sync::Arc};
+use alloc::sync::Arc;
 use core::{
     cell::Cell,
     marker::PhantomData,
@@ -78,8 +78,8 @@ impl CurrentTaskPtr {
         }
     }
 
-    pub(super) fn set_current(&self, task: &mut Box<OwnedTask>) {
-        self.ptr.set(Box::as_mut_ptr(task));
+    pub(super) fn set_current(&self, task: *mut OwnedTask) {
+        self.ptr.set(task);
     }
 }
 

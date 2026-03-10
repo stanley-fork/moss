@@ -1,5 +1,12 @@
-use super::{Task, TaskState, Tid};
-use crate::{memory::uaccess::UserCopyable, sched::waker::create_waker, sync::SpinLock};
+use super::Tid;
+use crate::{
+    memory::uaccess::UserCopyable,
+    sched::{
+        sched_task::{Work, state::TaskState},
+        waker::create_waker,
+    },
+    sync::SpinLock,
+};
 use alloc::{
     collections::btree_map::BTreeMap,
     sync::{Arc, Weak},
@@ -95,7 +102,7 @@ pub struct ThreadGroup {
     pub umask: SpinLock<u32>,
     pub parent: SpinLock<Option<Weak<ThreadGroup>>>,
     pub children: SpinLock<BTreeMap<Tgid, Arc<ThreadGroup>>>,
-    pub tasks: SpinLock<BTreeMap<Tid, Weak<Task>>>,
+    pub tasks: SpinLock<BTreeMap<Tid, Weak<Work>>>,
     pub signals: Arc<SpinLock<SignalActionState>>,
     pub rsrc_lim: Arc<SpinLock<ResourceLimits>>,
     pub pending_signals: SpinLock<SigSet>,
@@ -165,13 +172,10 @@ impl ThreadGroup {
                 *self.pending_signals.lock_save_irq() = SigSet::SIGKILL;
 
                 for task in self.tasks.lock_save_irq().values() {
-                    if let Some(task) = task.upgrade()
-                        && matches!(
-                            *task.state.lock_save_irq(),
-                            TaskState::Stopped | TaskState::Sleeping
-                        )
-                    {
-                        create_waker(task.descriptor()).wake();
+                    if let Some(task) = task.upgrade() {
+                        // Wake will handle Sleeping/Stopped → Enqueue,
+                        // and Running/Pending* → PreventedSleep (sets Woken).
+                        create_waker(task).wake();
                     }
                 }
             }
@@ -182,8 +186,12 @@ impl ThreadGroup {
                 for task in self.tasks.lock_save_irq().values() {
                     if let Some(task) = task.upgrade()
                         && matches!(
-                            *task.state.lock_save_irq(),
-                            TaskState::Runnable | TaskState::Running
+                            task.state.load(Ordering::Acquire),
+                            TaskState::Runnable
+                                | TaskState::Running
+                                | TaskState::Woken
+                                | TaskState::PendingSleep
+                                | TaskState::PendingStop
                         )
                     {
                         // Signal delivered. This task will eventually be
@@ -196,7 +204,7 @@ impl ThreadGroup {
                 // No task will pick up the signal. Wake one up.
                 for task in self.tasks.lock_save_irq().values() {
                     if let Some(task) = task.upgrade() {
-                        create_waker(task.descriptor()).wake();
+                        create_waker(task).wake();
                         return;
                     }
                 }

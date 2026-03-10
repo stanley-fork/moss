@@ -3,18 +3,27 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-use alloc::boxed::Box;
-
+use super::{DEFAULT_TIME_SLICE, SCHED_WEIGHT_BASE, VT_FIXED_SHIFT};
 use crate::{
+    arch::{Arch, ArchImpl},
     drivers::timer::{Instant, schedule_preempt},
-    kernel::cpu_id::CpuId,
-    process::{TaskState, owned::OwnedTask},
+    process::owned::OwnedTask,
+    sync::SpinLock,
 };
 
-use super::{DEFAULT_TIME_SLICE, SCHED_WEIGHT_BASE, VT_FIXED_SHIFT};
+use alloc::{boxed::Box, sync::Arc};
+use state::TaskStateMachine;
 
-pub struct SchedulableTask {
+pub mod state;
+
+pub struct Work {
     pub task: Box<OwnedTask>,
+    pub state: TaskStateMachine,
+    pub sched_data: SpinLock<Option<SchedulerData>>,
+}
+
+#[derive(Clone)]
+pub struct SchedulerData {
     pub v_runtime: u128,
     /// Virtual time at which the task becomes eligible (v_ei).
     pub v_eligible: u128,
@@ -25,7 +34,32 @@ pub struct SchedulableTask {
     pub last_run: Option<Instant>,
 }
 
-impl Deref for SchedulableTask {
+impl SchedulerData {
+    fn new() -> Self {
+        Self {
+            v_runtime: 0,
+            v_eligible: 0,
+            v_deadline: 0,
+            exec_start: None,
+            deadline: None,
+            last_run: None,
+        }
+    }
+}
+
+pub struct RunnableTask {
+    pub(super) task: Arc<Work>,
+    pub(super) sched_data: SchedulerData,
+}
+
+impl Drop for RunnableTask {
+    // Replace the hot sched info back into the struct.
+    fn drop(&mut self) {
+        *self.task.sched_data.lock_save_irq() = Some(self.sched_data.clone());
+    }
+}
+
+impl Deref for Work {
     type Target = OwnedTask;
 
     fn deref(&self) -> &Self::Target {
@@ -33,27 +67,52 @@ impl Deref for SchedulableTask {
     }
 }
 
-impl DerefMut for SchedulableTask {
+impl DerefMut for Work {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.task
     }
 }
 
-impl SchedulableTask {
-    pub fn new(task: Box<OwnedTask>) -> Box<Self> {
-        Box::new(Self {
+impl Work {
+    pub fn new(task: Box<OwnedTask>) -> Arc<Self> {
+        Arc::new(Self {
             task,
-            v_runtime: 0,
-            v_eligible: 0,
-            v_deadline: 0,
-            exec_start: None,
-            deadline: None,
-            last_run: None,
+            state: TaskStateMachine::new(),
+            sched_data: SpinLock::new(Some(SchedulerData::new())),
         })
     }
 
+    pub fn into_runnable(self: Arc<Self>) -> RunnableTask {
+        let sd = self
+            .sched_data
+            .lock_save_irq()
+            .take()
+            .expect("Should have sched data");
+
+        RunnableTask {
+            task: self,
+            sched_data: sd,
+        }
+    }
+}
+
+impl Deref for RunnableTask {
+    type Target = SchedulerData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sched_data
+    }
+}
+
+impl DerefMut for RunnableTask {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sched_data
+    }
+}
+
+impl RunnableTask {
     /// Re-issue a virtual deadline
-    pub fn replenish_deadline(&mut self) {
+    fn replenish_deadline(&mut self) {
         let q_ns: u128 = DEFAULT_TIME_SLICE.as_nanos();
         let v_delta = (q_ns << VT_FIXED_SHIFT) / self.weight() as u128;
         self.v_deadline = self.v_eligible + v_delta;
@@ -95,19 +154,11 @@ impl SchedulableTask {
     /// weight = priority + SCHED_WEIGHT_BASE
     /// The sum is clamped to a minimum of 1
     pub fn weight(&self) -> u32 {
-        let w = self.priority() as i32 + SCHED_WEIGHT_BASE;
+        let w = self.task.priority() as i32 + SCHED_WEIGHT_BASE;
         if w <= 0 { 1 } else { w as u32 }
     }
 
     pub fn compare_with(&self, other: &Self) -> core::cmp::Ordering {
-        if self.is_idle_task() {
-            return Ordering::Greater;
-        }
-
-        if other.is_idle_task() {
-            return Ordering::Less;
-        }
-
         self.v_deadline
             .cmp(&other.v_deadline)
             .then_with(|| self.v_runtime.cmp(&other.v_runtime))
@@ -141,8 +192,7 @@ impl SchedulableTask {
     /// Setup task accounting info such that it is about to be executed.
     pub fn about_to_execute(&mut self, now: Instant) {
         self.exec_start = Some(now);
-        *self.last_cpu.lock_save_irq() = CpuId::this();
-        *self.state.lock_save_irq() = TaskState::Running;
+        self.task.state.activate();
 
         // Deadline logic
         if self.deadline.is_none_or(|d| d <= now + DEFAULT_TIME_SLICE) {
@@ -152,5 +202,9 @@ impl SchedulableTask {
         if let Some(d) = self.deadline {
             schedule_preempt(d);
         }
+    }
+
+    pub fn switch_context(&self) {
+        ArchImpl::context_switch(self.task.t_shared.clone());
     }
 }

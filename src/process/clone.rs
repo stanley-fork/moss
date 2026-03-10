@@ -1,10 +1,10 @@
 use super::owned::OwnedTask;
 use super::ptrace::{PTrace, TracePoint, ptrace_stop};
 use super::{ctx::Context, thread_group::signal::SigSet};
-use crate::kernel::cpu_id::CpuId;
 use crate::memory::uaccess::copy_to_user;
+use crate::sched::sched_task::Work;
 use crate::{
-    process::{TASK_LIST, Task, TaskState},
+    process::{TASK_LIST, Task},
     sched::{self, current::current_task},
     sync::SpinLock,
 };
@@ -170,8 +170,6 @@ pub async fn sys_clone(
                 cwd,
                 root,
                 creds: SpinLock::new(creds),
-                state: Arc::new(SpinLock::new(TaskState::Runnable)),
-                last_cpu: SpinLock::new(CpuId::this()),
                 ptrace: SpinLock::new(ptrace),
                 utime: AtomicUsize::new(0),
                 stime: AtomicUsize::new(0),
@@ -181,28 +179,29 @@ pub async fn sys_clone(
         }
     };
 
-    let tid = new_task.tid;
+    let desc = new_task.descriptor();
+    let work = Work::new(Box::new(new_task));
 
     TASK_LIST
         .lock_save_irq()
-        .insert(new_task.descriptor(), Arc::downgrade(&new_task.t_shared));
+        .insert(desc, Arc::downgrade(&work));
 
-    new_task
-        .process
+    work.process
         .tasks
         .lock_save_irq()
-        .insert(tid, Arc::downgrade(&new_task.t_shared));
+        .insert(desc.tid, Arc::downgrade(&work));
 
-    sched::insert_task_cross_cpu(Box::new(new_task));
+    sched::insert_task_cross_cpu(work);
+
     NUM_FORKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
     // Honour CLONE_*SETTID semantics for the parent and (shared-VM) child.
     if flags.contains(CloneFlags::CLONE_PARENT_SETTID) && !parent_tidptr.is_null() {
-        copy_to_user(parent_tidptr, tid.value()).await?;
+        copy_to_user(parent_tidptr, desc.tid.value()).await?;
     }
     if flags.contains(CloneFlags::CLONE_CHILD_SETTID) && !child_tidptr.is_null() {
-        copy_to_user(child_tidptr, tid.value()).await?;
+        copy_to_user(child_tidptr, desc.tid.value()).await?;
     }
 
-    Ok(tid.value() as _)
+    Ok(desc.tid.value() as _)
 }

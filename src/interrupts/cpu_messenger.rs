@@ -6,7 +6,7 @@ use super::{
     ClaimedInterrupt, InterruptConfig, InterruptDescriptor, InterruptHandler, get_interrupt_root,
 };
 use crate::kernel::cpu_id::CpuId;
-use crate::process::owned::OwnedTask;
+use crate::sched::sched_task::Work;
 use crate::{
     arch::ArchImpl,
     drivers::Driver,
@@ -14,7 +14,6 @@ use crate::{
     sched,
     sync::{OnceLock, SpinLock},
 };
-use alloc::boxed::Box;
 use alloc::{sync::Arc, vec::Vec};
 use libkernel::{
     CpuOps,
@@ -23,7 +22,8 @@ use libkernel::{
 use log::warn;
 
 pub enum Message {
-    PutTask(Box<OwnedTask>),
+    EnqueueWork(Arc<Work>),
+    #[expect(unused)]
     WakeupTask(Waker),
 }
 
@@ -50,7 +50,7 @@ impl InterruptHandler for CpuMessenger {
             .try_pop()
         {
             match message {
-                Message::PutTask(task) => sched::insert_task(task),
+                Message::EnqueueWork(work) => sched::insert_work(work),
                 Message::WakeupTask(waker) => waker.wake(),
             }
         }

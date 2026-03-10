@@ -105,8 +105,7 @@ macro_rules! ktest_impl {
                 $name,
                 fn [<__sync_ $name>]() {
                     let mut fut = alloc::boxed::Box::pin($name());
-                    let desc = crate::process::TaskDescriptor::from_tgid_tid(crate::process::thread_group::Tgid(0), crate::process::Tid(0));
-                    let waker = crate::sched::waker::create_waker(desc);
+                    let waker = crate::sched::current_work_waker();
                     let mut ctx = core::task::Context::from_waker(&waker);
                     loop {
                         match fut.as_mut().poll(&mut ctx) {

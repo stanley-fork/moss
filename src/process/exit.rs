@@ -1,10 +1,10 @@
 use super::{
-    TASK_LIST, TaskState,
+    TASK_LIST,
     ptrace::{TracePoint, ptrace_stop},
     thread_group::{ProcessState, Tgid, ThreadGroup, signal::SigId, wait::ChildState},
     threading::futex::{self, key::FutexKey},
 };
-use crate::sched::current::current_task;
+use crate::sched::{self, current::current_task};
 use crate::{memory::uaccess::copy_to_user, sched::current::current_task_shared};
 use alloc::vec::Vec;
 use libkernel::error::Result;
@@ -34,7 +34,8 @@ pub fn do_exit_group(exit_code: ChildState) {
         if *process_state != ProcessState::Running {
             // We're already on our way out. Just kill this thread.
             drop(process_state);
-            *task.state.lock_save_irq() = TaskState::Finished;
+            drop(task);
+            sched::current_work().state.finish();
             return;
         }
 
@@ -51,7 +52,7 @@ pub fn do_exit_group(exit_code: ChildState) {
                 // TODO: Send an IPI/Signal to halt execution now. For now, just
                 // wait for the scheduler to never schedule any of it's tasks
                 // again.
-                *other_thread.state.lock_save_irq() = TaskState::Finished;
+                other_thread.state.finish();
             }
         }
     }
@@ -87,7 +88,8 @@ pub fn do_exit_group(exit_code: ChildState) {
         .set_signal(SigId::SIGCHLD);
 
     // 5. This thread is now finished.
-    *task.state.lock_save_irq() = TaskState::Finished;
+    drop(task);
+    sched::current_work().state.finish();
 
     // NOTE: that the scheduler will never execute the task again since it's
     // state is set to Finished.
@@ -151,7 +153,7 @@ pub async fn sys_exit(exit_code: usize) -> Result<usize> {
         Ok(0)
     } else {
         // Mark our own state as finished.
-        *task.state.lock_save_irq() = TaskState::Finished;
+        sched::current_work().state.finish();
 
         // Remove ourself from the process's thread list.
         tasks_lock.remove(&task.tid);

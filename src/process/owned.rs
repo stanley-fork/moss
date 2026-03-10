@@ -1,7 +1,5 @@
-use core::ops::Deref;
-
 use super::{
-    Comm, Task, TaskState, Tid,
+    Comm, Task, Tid,
     creds::Credentials,
     ctx::{Context, UserCtx},
     fd_table::FileDescriptorTable,
@@ -13,14 +11,13 @@ use super::{
     },
     threading::RobustListHead,
 };
-use crate::drivers::timer::{Instant, now};
+use crate::{arch::Arch, fs::DummyInode, sync::SpinLock};
 use crate::{
-    arch::{Arch, ArchImpl},
-    fs::DummyInode,
-    kernel::cpu_id::CpuId,
-    sync::SpinLock,
+    arch::ArchImpl,
+    drivers::timer::{Instant, now},
 };
 use alloc::sync::Arc;
+use core::ops::Deref;
 use core::sync::atomic::AtomicUsize;
 use libkernel::{
     VirtualMemory,
@@ -72,13 +69,11 @@ impl OwnedTask {
             tid: Tid::idle_for_cpu(),
             comm: Arc::new(SpinLock::new(Comm::new("idle"))),
             process: thread_group_builder.build(),
-            state: Arc::new(SpinLock::new(TaskState::Runnable)),
             cwd: Arc::new(SpinLock::new((Arc::new(DummyInode {}), PathBuf::new()))),
             root: Arc::new(SpinLock::new((Arc::new(DummyInode {}), PathBuf::new()))),
             creds: SpinLock::new(Credentials::new_root()),
             vm: Arc::new(SpinLock::new(vm)),
             fd_table: Arc::new(SpinLock::new(FileDescriptorTable::new())),
-            last_cpu: SpinLock::new(CpuId::this()),
             ptrace: SpinLock::new(PTrace::new()),
             utime: AtomicUsize::new(0),
             stime: AtomicUsize::new(0),
@@ -102,7 +97,6 @@ impl OwnedTask {
             tid: Tid(1),
             comm: Arc::new(SpinLock::new(Comm::new("init"))),
             process: ThreadGroupBuilder::new(Tgid::init()).build(),
-            state: Arc::new(SpinLock::new(TaskState::Runnable)),
             cwd: Arc::new(SpinLock::new((Arc::new(DummyInode {}), PathBuf::new()))),
             root: Arc::new(SpinLock::new((Arc::new(DummyInode {}), PathBuf::new()))),
             creds: SpinLock::new(Credentials::new_root()),
@@ -110,7 +104,6 @@ impl OwnedTask {
                 ProcessVM::empty().expect("Could not create init process's VM"),
             )),
             fd_table: Arc::new(SpinLock::new(FileDescriptorTable::new())),
-            last_cpu: SpinLock::new(CpuId::this()),
             ptrace: SpinLock::new(PTrace::new()),
             last_account: AtomicUsize::new(0),
             utime: AtomicUsize::new(0),

@@ -66,7 +66,6 @@ use crate::{
         socket::sys_socket,
     },
     process::{
-        TaskState,
         caps::{sys_capget, sys_capset},
         clone::sys_clone,
         creds::{
@@ -98,7 +97,7 @@ use crate::{
         },
         threading::{futex::sys_futex, sys_set_robust_list, sys_set_tid_address},
     },
-    sched::{current::current_task, sys_sched_yield},
+    sched::{self, current::current_task, sched_task::state::TaskState, sys_sched_yield},
 };
 use alloc::boxed::Box;
 use libkernel::{
@@ -389,10 +388,12 @@ pub async fn handle_syscall() {
         0x5d => {
             let _ = sys_exit(arg1 as _).await;
 
-            debug_assert!(matches!(
-                *current_task().state.lock_save_irq(),
-                TaskState::Finished
-            ));
+            debug_assert!(
+                sched::current_work()
+                    .state
+                    .load(core::sync::atomic::Ordering::Acquire)
+                    == TaskState::Finished
+            );
 
             // Don't process result on exit.
             return;
@@ -400,10 +401,12 @@ pub async fn handle_syscall() {
         0x5e => {
             let _ = sys_exit_group(arg1 as _).await;
 
-            debug_assert!(matches!(
-                *current_task().state.lock_save_irq(),
-                TaskState::Finished
-            ));
+            debug_assert!(
+                sched::current_work()
+                    .state
+                    .load(core::sync::atomic::Ordering::Acquire)
+                    == TaskState::Finished
+            );
 
             // Don't process result on exit.
             return;

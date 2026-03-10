@@ -1,23 +1,24 @@
-use core::future::poll_fn;
-use core::task::{Poll, Waker};
-
-use crate::arch::{Arch, ArchImpl};
-use crate::fs::syscalls::iov::IoVec;
-use crate::memory::uaccess::{copy_from_user, copy_to_user};
-use crate::process::TASK_LIST;
-use crate::process::thread_group::signal::SigId;
-use crate::sched::current::{current_task, current_task_shared};
+use super::thread_group::{ThreadGroup, wait::ChildState};
+use crate::{
+    arch::{Arch, ArchImpl},
+    fs::syscalls::iov::IoVec,
+    memory::uaccess::{copy_from_user, copy_to_user},
+    process::{TASK_LIST, thread_group::signal::SigId},
+    sched::current::{current_task, current_task_shared},
+};
 use alloc::sync::Arc;
 use bitflags::Flags;
-use libkernel::error::{KernelError, Result};
-use libkernel::memory::address::UA;
+use core::{
+    future::poll_fn,
+    task::{Poll, Waker},
+};
+use libkernel::{
+    error::{KernelError, Result},
+    memory::address::UA,
+};
 use log::warn;
 
 type GpRegs = <ArchImpl as Arch>::PTraceGpRegs;
-
-use super::TaskState;
-use super::thread_group::ThreadGroup;
-use super::thread_group::wait::ChildState;
 
 const PTRACE_EVENT_FORK: usize = 1;
 const PTRACE_EVENT_VFORK: usize = 2;
@@ -43,7 +44,7 @@ bitflags::bitflags! {
         const PTRACE_O_SUSPEND_SECCOMP = 1 << 21;
     }
 
-    #[derive(Clone, Copy, PartialEq)]
+    #[derive(Clone, Copy, PartialEq, Debug)]
     pub struct TracePoint: u32 {
         const SyscallEntry = 0x01;
         const SyscallExit  = 0x02;
@@ -177,9 +178,6 @@ impl PTrace {
     }
 
     pub fn set_waker(&mut self, waker: Waker) {
-        // Ensure we never override an already existing waker.
-        debug_assert!(self.waker.is_none());
-
         self.waker = Some(waker);
     }
 
@@ -259,22 +257,29 @@ impl TryFrom<i32> for PtraceOperation {
 
 pub async fn ptrace_stop(point: TracePoint) -> bool {
     let task_sh = current_task_shared();
-    {
-        let mut ptrace = task_sh.ptrace.lock_save_irq();
-
-        if ptrace.hit_trace_point(point, current_task().ctx.user()) {
-            ptrace.notify_tracer_of_trap(&task_sh.process);
-        } else {
-            return false;
-        }
-    }
+    let mut notified = false;
 
     poll_fn(|cx| {
         let mut ptrace = task_sh.ptrace.lock_save_irq();
 
-        if matches!(ptrace.state, Some(PTraceState::Running)) {
+        if !notified {
+            // First poll: hit the trace point, set waker, then notify.
+            // The waker must be set *before* notification so the tracer
+            // can always find it when it does PTRACE_SYSCALL/CONT.
+            if !ptrace.hit_trace_point(point, current_task().ctx.user()) {
+                return Poll::Ready(false);
+            }
+
+            notified = true;
+            ptrace.set_waker(cx.waker().clone());
+            ptrace.notify_tracer_of_trap(&task_sh.process);
+            Poll::Pending
+        } else if matches!(ptrace.state, Some(PTraceState::Running)) {
+            // Tracer resumed us.
             Poll::Ready(true)
         } else {
+            // Re-polled (e.g. spurious wakeup from signal) but tracer
+            // hasn't resumed yet. Refresh the waker and go back to sleep.
             ptrace.set_waker(cx.waker().clone());
             Poll::Pending
         }
@@ -381,7 +386,9 @@ pub async fn sys_ptrace(op: i32, pid: u64, addr: UA, data: UA) -> Result<usize> 
                 .break_points
                 .remove(TracePoint::SyscallEntry | TracePoint::SyscallExit);
 
-            *target_task.state.lock_save_irq() = TaskState::Runnable;
+            if let Some(waker) = ptrace.waker.take() {
+                waker.wake();
+            }
 
             Ok(0)
         }

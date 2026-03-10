@@ -1,5 +1,6 @@
 use crate::drivers::timer::Instant;
 use crate::sched::CPU_STAT;
+use crate::sched::sched_task::Work;
 use crate::{
     arch::ArchImpl,
     kernel::cpu_id::CpuId,
@@ -14,7 +15,6 @@ use alloc::{
     collections::btree_map::BTreeMap,
     sync::{Arc, Weak},
 };
-use core::fmt::Display;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use creds::Credentials;
 use fd_table::FileDescriptorTable;
@@ -124,35 +124,6 @@ impl TaskDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskState {
-    Running,
-    Runnable,
-    Woken,
-    Stopped,
-    Sleeping,
-    Finished,
-}
-
-impl Display for TaskState {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let state_str = match self {
-            TaskState::Running => "R",
-            TaskState::Runnable => "R",
-            TaskState::Woken => "W",
-            TaskState::Stopped => "T",
-            TaskState::Sleeping => "S",
-            TaskState::Finished => "Z",
-        };
-        write!(f, "{state_str}")
-    }
-}
-
-impl TaskState {
-    pub fn is_finished(self) -> bool {
-        matches!(self, Self::Finished)
-    }
-}
 pub type ProcVM = ProcessVM<<ArchImpl as VirtualMemory>::ProcessAddressSpace>;
 
 #[derive(Copy, Clone)]
@@ -184,8 +155,6 @@ pub struct Task {
     pub root: Arc<SpinLock<(Arc<dyn Inode>, PathBuf)>>,
     pub creds: SpinLock<Credentials>,
     pub fd_table: Arc<SpinLock<FileDescriptorTable>>,
-    pub state: Arc<SpinLock<TaskState>>,
-    pub last_cpu: SpinLock<CpuId>,
     pub ptrace: SpinLock<PTrace>,
     pub utime: AtomicUsize,
     pub stime: AtomicUsize,
@@ -308,7 +277,7 @@ impl Task {
     }
 }
 
-pub fn find_task_by_descriptor(descriptor: &TaskDescriptor) -> Option<Arc<Task>> {
+pub fn find_task_by_descriptor(descriptor: &TaskDescriptor) -> Option<Arc<Work>> {
     TASK_LIST
         .lock_save_irq()
         .get(descriptor)
@@ -316,11 +285,11 @@ pub fn find_task_by_descriptor(descriptor: &TaskDescriptor) -> Option<Arc<Task>>
 }
 
 /// Finds the root task for the given thread group
-pub fn find_process_by_tgid(tgid: Tgid) -> Option<Arc<Task>> {
+pub fn find_process_by_tgid(tgid: Tgid) -> Option<Arc<Work>> {
     find_task_by_descriptor(&TaskDescriptor::from_tgid_tid(tgid, Tid::from_tgid(tgid)))
 }
 
-pub static TASK_LIST: SpinLock<BTreeMap<TaskDescriptor, Weak<Task>>> =
+pub static TASK_LIST: SpinLock<BTreeMap<TaskDescriptor, Weak<Work>>> =
     SpinLock::new(BTreeMap::new());
 
 unsafe impl Send for Task {}
