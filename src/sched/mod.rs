@@ -4,7 +4,7 @@ use crate::interrupts::cpu_messenger::{Message, message_cpu};
 use crate::kernel::cpu_id::CpuId;
 use crate::process::owned::OwnedTask;
 use crate::{per_cpu_private, per_cpu_shared, process::TASK_LIST};
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::fmt::Debug;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use core::task::Waker;
@@ -13,7 +13,7 @@ use current::{CUR_TASK_PTR, current_task};
 use libkernel::error::Result;
 use log::warn;
 use runqueue::RunQueue;
-use sched_task::Work;
+use sched_task::{RunnableTask, Work};
 use waker::create_waker;
 
 pub mod current;
@@ -116,7 +116,13 @@ fn schedule() {
         return;
     }
 
-    SCHED_STATE.borrow_mut().do_schedule();
+    let deferred = SCHED_STATE.borrow_mut().do_schedule();
+
+    // Drop the old RunnableTask outside the SCHED_STATE borrow. This ensures
+    // that any destructors that may be called by dropping the task will be
+    // called without SCHED_STATE borrowed, e.g. closeing the other end of a
+    // pipe.
+    drop(deferred);
 }
 
 pub fn spawn_kernel_work(fut: impl Future<Output = ()> + 'static + Send) {
@@ -220,7 +226,7 @@ impl SchedState {
         // No-op on single-core systems.
     }
 
-    pub fn do_schedule(&mut self) {
+    pub fn do_schedule(&mut self) -> Vec<RunnableTask> {
         self.update_global_least_tasked_cpu_info();
 
         let now_inst = now().expect("System timer not initialised");
@@ -235,7 +241,7 @@ impl SchedState {
             current.task.reset_last_account(now_inst);
         }
 
-        self.run_q.schedule(now_inst);
+        self.run_q.schedule(now_inst)
     }
 }
 

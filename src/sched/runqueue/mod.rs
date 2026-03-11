@@ -6,7 +6,7 @@ use crate::{
     arch::{Arch, ArchImpl},
     drivers::timer::Instant,
 };
-use alloc::{boxed::Box, collections::binary_heap::BinaryHeap, sync::Arc};
+use alloc::{boxed::Box, collections::binary_heap::BinaryHeap, sync::Arc, vec::Vec};
 use core::{cmp, ptr, sync::atomic::Ordering};
 use vclock::VClock;
 
@@ -88,10 +88,15 @@ impl RunQueue {
     }
 
     /// Picks the next task to execute and performs the context switch.
-    pub fn schedule(&mut self, now: Instant) {
+    ///
+    /// Returns `RunnableTask`s that must be dropped after the caller releases
+    /// `SCHED_STATE`. Dropping inside the borrow can trigger waker calls that
+    /// re-enter `SCHED_STATE` and panic.
+    pub fn schedule(&mut self, now: Instant) -> Vec<RunnableTask> {
         self.v_clock.advance(now, self.weight());
 
         let mut prev_task = ptr::null();
+        let mut deferred_drops: Vec<RunnableTask> = Vec::new();
 
         if let Some(cur_task) = self.running_task.take() {
             let state = cur_task.task.state.load(Ordering::Acquire);
@@ -102,8 +107,8 @@ impl RunQueue {
                     self.enqueue(cur_task);
                 }
                 TaskState::PendingSleep | TaskState::PendingStop => {
-                    // Task wants to deactivate. Drop the RunnableTask
-                    // (restoring sched_data), then finalize the transition.
+                    // Task wants to deactivate. Drop the RunnableTask now to
+                    // restore sched_data.
                     let work = cur_task.task.clone();
                     self.total_weight = self.total_weight.saturating_sub(cur_task.weight() as u64);
                     drop(cur_task);
@@ -114,13 +119,14 @@ impl RunQueue {
                     }
                 }
                 _ => {
-                    // Finished — remove weight.
+                    // Finished — remove weight. Defer the drop.
                     self.total_weight = self.total_weight.saturating_sub(cur_task.weight() as u64);
+                    deferred_drops.push(cur_task);
                 }
             }
         }
 
-        if let Some(mut next_task) = self.find_next_task() {
+        if let Some(mut next_task) = self.find_next_task(&mut deferred_drops) {
             next_task.about_to_execute(now);
 
             if Arc::as_ptr(&next_task.task) != prev_task {
@@ -145,6 +151,8 @@ impl RunQueue {
                 .borrow_mut()
                 .set_current(Box::as_ptr(&self.idle.task.task) as *mut _);
         }
+
+        deferred_drops
     }
 
     /// Pops any tasks that were ineligible which have become eligible from the
@@ -161,17 +169,25 @@ impl RunQueue {
         }
     }
 
-    /// Returns the Descriptor of the best task to run next.
+    /// Returns the best task to run next, skipping any Finished tasks.
+    ///
+    /// Finished tasks found in the heaps are removed and pushed into
+    /// `deferred_drops` so they are dropped outside the `SCHED_STATE` borrow.
     ///
     /// # Returns
-    /// - `None` when no new task can be found (the runqueue is empty).
+    /// - `None` when no runnable task can be found (the runqueue is empty).
     /// - `Some(tsk)` when the current task should be replaced with `tsk`.
-    fn find_next_task(&mut self) -> Option<RunnableTask> {
+    fn find_next_task(&mut self, deferred_drops: &mut Vec<RunnableTask>) -> Option<RunnableTask> {
         while let Some(tsk) = self.pop_now_eligible_task() {
             self.eligible.push(ByDeadline(tsk));
         }
 
-        if let Some(ByDeadline(best)) = self.eligible.pop() {
+        while let Some(ByDeadline(best)) = self.eligible.pop() {
+            if best.task.state.load(Ordering::Acquire).is_finished() {
+                self.total_weight = self.total_weight.saturating_sub(best.weight() as u64);
+                deferred_drops.push(best);
+                continue;
+            }
             return Some(best);
         }
 
@@ -179,7 +195,7 @@ impl RunQueue {
         // Fast-forward vclk to the next earliest `v_eligible`.
         if let Some(ByEligible(tsk)) = self.ineligible.peek() {
             self.v_clock.fast_forward(tsk.v_eligible);
-            return self.find_next_task();
+            return self.find_next_task(deferred_drops);
         }
 
         // The runqueues are completely empty.  Go idle.
