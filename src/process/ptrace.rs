@@ -1,9 +1,12 @@
-use super::thread_group::{ThreadGroup, wait::ChildState};
+use super::{
+    Tid, find_task_by_tid,
+    thread_group::{ThreadGroup, pid::PidT, wait::ChildState},
+};
 use crate::{
     arch::{Arch, ArchImpl},
     fs::syscalls::iov::IoVec,
     memory::uaccess::{copy_from_user, copy_to_user},
-    process::{TASK_LIST, thread_group::signal::SigId},
+    process::thread_group::signal::SigId,
     sched::syscall_ctx::ProcessCtx,
 };
 use alloc::sync::Arc;
@@ -287,7 +290,7 @@ pub async fn ptrace_stop(ctx: &ProcessCtx, point: TracePoint) -> bool {
     .await
 }
 
-pub async fn sys_ptrace(ctx: &ProcessCtx, op: i32, pid: u64, addr: UA, data: UA) -> Result<usize> {
+pub async fn sys_ptrace(ctx: &ProcessCtx, op: i32, pid: PidT, addr: UA, data: UA) -> Result<usize> {
     let op = PtraceOperation::try_from(op)?;
 
     if op == PtraceOperation::TraceMe {
@@ -308,14 +311,7 @@ pub async fn sys_ptrace(ctx: &ProcessCtx, op: i32, pid: u64, addr: UA, data: UA)
         return Ok(0);
     }
 
-    let target_task = {
-        TASK_LIST
-            .lock_save_irq()
-            .iter()
-            .find(|(desc, _)| desc.tid.value() == pid as u32)
-            .and_then(|(_, task)| task.upgrade())
-            .ok_or(KernelError::NoProcess)?
-    };
+    let target_task = { find_task_by_tid(Tid::from_pid_t(pid)).ok_or(KernelError::NoProcess)? };
 
     // TODO: Check CAP_SYS_PTRACE & security
     match op {

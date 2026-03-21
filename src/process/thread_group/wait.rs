@@ -1,5 +1,6 @@
 use super::{
     Pgid, Tgid, ThreadGroup,
+    pid::PidT,
     signal::{InterruptResult, Interruptable, SigId},
 };
 use crate::clock::timespec::TimeSpec;
@@ -13,8 +14,6 @@ use libkernel::{
     error::{KernelError, Result},
     memory::address::TUA,
 };
-
-pub type PidT = i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

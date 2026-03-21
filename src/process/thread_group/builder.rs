@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, AtomicUsize};
+use core::sync::atomic::AtomicUsize;
 
 use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 
@@ -87,7 +87,6 @@ impl ThreadGroupBuilder {
             // Don't start from '0'. Since clone expects the parent to return
             // the tid and the child to return '0', if we started from '0' we
             // couldn't then differentiate between a child and a parent.
-            next_tid: AtomicU32::new(1),
             state: SpinLock::new(ProcessState::Running),
             tasks: SpinLock::new(BTreeMap::new()),
             executable: SpinLock::new(None),
