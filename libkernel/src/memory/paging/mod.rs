@@ -9,6 +9,7 @@ use core::marker::PhantomData;
 use permissions::PtePermissions;
 
 pub mod permissions;
+pub(crate) mod tear_down;
 pub mod walk;
 
 #[cfg(test)]
