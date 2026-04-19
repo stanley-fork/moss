@@ -1,6 +1,6 @@
 use crate::clock::timer::{TimerNamespace, make_timer_id, parse_timer_id};
 use crate::clock::timespec::TimeSpec;
-use crate::drivers::timer::{Instant, now, uptime};
+use crate::drivers::timer::{Instant, now};
 use crate::memory::uaccess::{UserCopyable, copy_from_user, copy_to_user};
 use crate::process::thread_group::signal::SigId;
 use crate::process::{ITimer, Task, Tid, find_task_by_tid};
@@ -76,15 +76,18 @@ pub fn itimer_irq_handler(tid: Tid, id: u64) -> Option<Instant> {
     let task = find_task_by_tid(tid)?;
     match ty {
         ITimerType::Real => {
-            task.process.deliver_signal(SigId::SIGALRM);
             let mut timers = task.i_timers.lock_save_irq();
-            if let Some(ref mut timer) = timers.real
-                && let Some(interval) = timer.interval
-            {
-                timer.next = now().unwrap() + interval;
-                Some(timer.next)
+            if let Some(ref mut timer) = timers.real {
+                task.process.deliver_signal(SigId::SIGALRM);
+
+                if let Some(interval) = timer.interval {
+                    timer.next = now().unwrap() + interval;
+                    Some(timer.next)
+                } else {
+                    timers.real = None;
+                    None
+                }
             } else {
-                timers.real = None;
                 None
             }
         }
@@ -94,7 +97,7 @@ pub fn itimer_irq_handler(tid: Tid, id: u64) -> Option<Instant> {
 
 async fn getitimer(current_task: &Task, which: ITimerType) -> libkernel::error::Result<ITimerVal> {
     let now = match which {
-        ITimerType::Real => uptime(),
+        ITimerType::Real => now().unwrap(),
         _ => unimplemented!(),
     };
     Ok(current_task
@@ -102,7 +105,7 @@ async fn getitimer(current_task: &Task, which: ITimerType) -> libkernel::error::
         .lock_save_irq()
         .real
         .map(|t| {
-            let remaining = Duration::from(t.next) - now;
+            let remaining = t.next - now;
             let interval = t.interval.unwrap_or_default();
             ITimerVal {
                 it_interval: TimeSpec {
@@ -193,4 +196,19 @@ pub async fn sys_setitimer(
         _ => unimplemented!(),
     }
     Ok(0)
+}
+
+/// Disarms all itimers for a task, used when exiting or execve
+pub fn cleanup_itimers(task: &Task) {
+    let mut timers = task.i_timers.lock_save_irq();
+    if timers.real.is_some() {
+        crate::drivers::timer::SYS_TIMER
+            .get()
+            .unwrap()
+            .remove_scheduled_timer(
+                task.tid(),
+                make_timer_id(TimerNamespace::ITimer, ITimerType::Real as u32),
+            );
+        timers.real = None;
+    }
 }

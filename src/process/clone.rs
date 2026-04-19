@@ -1,6 +1,6 @@
-use super::Tid;
 use super::owned::OwnedTask;
 use super::ptrace::{PTrace, TracePoint, ptrace_stop};
+use super::{ITimers, Tid};
 use super::{
     ctx::Context,
     thread_group::signal::{AtomicSigSet, SigSet},
@@ -181,7 +181,7 @@ pub async fn sys_clone(
                 fd_table: files,
                 cwd,
                 root,
-                i_timers: SpinLock::new(*current_task.i_timers.lock_save_irq()),
+                i_timers: SpinLock::new(ITimers::default()),
                 creds: SpinLock::new(creds),
                 ptrace: SpinLock::new(ptrace),
                 sig_mask: new_sigmask,
