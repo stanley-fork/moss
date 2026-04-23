@@ -1,6 +1,6 @@
 use crate::ArchImpl;
-use crate::process::Comm;
 use crate::process::ptrace::{TracePoint, ptrace_stop};
+use crate::process::{Comm, ITimers};
 use crate::sched::syscall_ctx::ProcessCtx;
 use crate::{
     arch::Arch,
@@ -214,6 +214,7 @@ async fn exec_elf(
     fd_table.close_cloexec_entries().await;
     *ctx.shared().fd_table.lock_save_irq() = fd_table;
     *ctx.shared().process.executable.lock_save_irq() = Some(path.to_owned());
+    *ctx.shared().i_timers.lock_save_irq() = ITimers::default();
 
     Ok(())
 }

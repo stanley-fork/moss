@@ -4,6 +4,7 @@ use super::{
     thread_group::{ProcessState, Tgid, ThreadGroup, signal::SigId, wait::ChildState},
     threading::futex::{self, key::FutexKey},
 };
+use crate::clock::syscalls::itimer::cleanup_itimers;
 use crate::memory::uaccess::copy_to_user;
 use crate::sched::syscall_ctx::ProcessCtx;
 use crate::sched::{self};
@@ -46,6 +47,7 @@ pub fn do_exit_group(task: &Arc<Task>, exit_code: ChildState) {
     // pointers and upgrade them.
     for thread_weak in process.tasks.lock_save_irq().values() {
         if let Some(other_thread) = thread_weak.upgrade() {
+            cleanup_itimers(&other_thread);
             // Don't signal ourselves
             if other_thread.tid != task.tid {
                 // TODO: Send an IPI/Signal to halt execution now. For now, just
